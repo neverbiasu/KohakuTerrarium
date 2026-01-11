@@ -18,6 +18,14 @@ class OutputTarget(Enum):
     EXTERNAL = "external"  # Stream directly to user/output
 
 
+class ContextUpdateMode(Enum):
+    """How interactive sub-agents handle context updates."""
+
+    INTERRUPT_RESTART = "interrupt_restart"  # Stop current, start new response
+    QUEUE_APPEND = "queue_append"  # Queue updates, process after current
+    FLUSH_REPLACE = "flush_replace"  # Flush output, replace context immediately
+
+
 @dataclass
 class SubAgentConfig:
     """
@@ -32,8 +40,10 @@ class SubAgentConfig:
         can_modify: Whether sub-agent can modify files
         stateless: No persistent state between calls
         interactive: Receives ongoing context updates from parent
+        context_mode: How to handle context updates (for interactive agents)
         output_to: Where output goes (controller or external)
         output_module: Output module name (if output_to=external)
+        return_as_context: Return output text to parent controller as context
         max_turns: Maximum conversation turns
         timeout: Maximum execution time in seconds
         model: LLM model to use (None = inherit from parent)
@@ -50,8 +60,10 @@ class SubAgentConfig:
     can_modify: bool = False
     stateless: bool = True
     interactive: bool = False
+    context_mode: ContextUpdateMode = ContextUpdateMode.INTERRUPT_RESTART
     output_to: OutputTarget = OutputTarget.CONTROLLER
     output_module: str | None = None
+    return_as_context: bool = False  # Return output text to parent as context
     max_turns: int = 10
     timeout: float = 300.0
     model: str | None = None
@@ -91,9 +103,11 @@ class SubAgentConfig:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "SubAgentConfig":
         """Create config from dictionary (e.g., YAML config)."""
-        # Handle output_to conversion
+        # Handle enum conversions
         if "output_to" in data and isinstance(data["output_to"], str):
             data["output_to"] = OutputTarget(data["output_to"])
+        if "context_mode" in data and isinstance(data["context_mode"], str):
+            data["context_mode"] = ContextUpdateMode(data["context_mode"])
 
         # Filter to known fields
         known_fields = {
@@ -105,8 +119,10 @@ class SubAgentConfig:
             "can_modify",
             "stateless",
             "interactive",
+            "context_mode",
             "output_to",
             "output_module",
+            "return_as_context",
             "max_turns",
             "timeout",
             "model",
