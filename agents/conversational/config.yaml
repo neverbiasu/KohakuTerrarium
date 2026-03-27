@@ -46,6 +46,10 @@ tools:
     type: builtin
   - name: write
     type: builtin
+  - name: think
+    type: builtin
+  - name: scratchpad
+    type: builtin
 
 # Sub-agents
 subagents:
@@ -53,6 +57,14 @@ subagents:
   - name: memory_read
     type: builtin
   - name: memory_write
+    type: builtin
+
+  # Research agent for looking up information
+  - name: research
+    type: builtin
+
+  # Critic for reviewing responses
+  - name: critic
     type: builtin
 
   # Output sub-agent - generates streaming responses
