@@ -145,8 +145,11 @@ kt terrarium run examples/terrariums/swe_team_managed_tui/
 ```
 Input ----------+
                 +----> Controller (LLM) <----> Tools (parallel, async)
-Triggers -------+           |            <----> Sub-Agents (nested LLMs)
-                            |
+Triggers -------+           |            <---->  |  can create/delete triggers
+  ^                         |            <----> Sub-Agents (nested LLMs)
+  |                         |                     +-- own tools & triggers
+  +---- tools can           |
+        manage triggers     |
                       +-----+------+
                       |            |
                    Output      Channels ----> Other Creatures
