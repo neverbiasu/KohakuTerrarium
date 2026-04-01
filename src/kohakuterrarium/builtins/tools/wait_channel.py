@@ -117,28 +117,32 @@ class WaitChannelTool(BaseTool):
     def get_full_documentation(self, tool_format: str = "native") -> str:
         return """# wait_channel
 
-Wait for a message to arrive on a named channel. For request-response
-patterns: send a message, then wait for reply on another channel.
+Wait for a message on a named internal channel. Primarily for
+request-response patterns with your own sub-agents.
 
-Supports both queue channels (SubAgentChannel) and broadcast channels
-(AgentChannel). For broadcast channels, automatically subscribes using
-the agent name and unsubscribes after receiving.
+## IMPORTANT: Do NOT use this for team channels
+
+In a terrarium, messages from team channels (tasks, review, feedback, etc.)
+arrive AUTOMATICALLY via triggers. You do NOT need to call wait_channel
+for them. Using wait_channel on a team queue channel would CONSUME the
+message, potentially stealing it from the intended recipient.
+
+Only use wait_channel for:
+- Internal channels you created yourself
+- Sub-agent response channels
+- Custom request-response patterns within your own agent
 
 ## Arguments
 
 | Arg | Type | Description |
 |-----|------|-------------|
-| channel | string | Channel name to listen on (required) |
+| channel | string | Internal channel name (required) |
 | timeout | number | Seconds to wait (default: 30) |
 
 ## Behavior
 
-- Resolves the channel by checking private session first, then shared environment.
-- For broadcast channels, subscribes using the agent name and unsubscribes after receiving.
-- Returns sender, message ID, content, and metadata of the received message.
+- Checks private session channels first, then shared environment.
+- For broadcast channels, subscribes and unsubscribes after receiving.
+- Returns sender, message ID, and content of the received message.
 - On timeout, returns a timeout notification with exit code 1.
-
-## Mode
-
-BACKGROUND - runs asynchronously, does not block other tools.
 """

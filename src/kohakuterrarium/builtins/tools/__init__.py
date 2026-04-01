@@ -18,6 +18,7 @@ from kohakuterrarium.builtins.tools.edit import EditTool
 from kohakuterrarium.builtins.tools.glob import GlobTool
 from kohakuterrarium.builtins.tools.grep import GrepTool
 from kohakuterrarium.builtins.tools.http_tool import HttpTool
+from kohakuterrarium.builtins.tools.info import InfoTool
 from kohakuterrarium.builtins.tools.json_read import JsonReadTool
 from kohakuterrarium.builtins.tools.json_write import JsonWriteTool
 from kohakuterrarium.builtins.tools.list_triggers import ListTriggersTool
@@ -47,6 +48,7 @@ __all__ = [
     "GlobTool",
     "GrepTool",
     "HttpTool",
+    "InfoTool",
     "JsonReadTool",
     "JsonWriteTool",
     "ListTriggersTool",

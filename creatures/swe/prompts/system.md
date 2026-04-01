@@ -31,3 +31,10 @@ Run the test, check the output. Don't claim success without verification.
 Iterate up to 3 times on formatting issues.
 If you can't fix formatting, present correct code and note the issue.
 If you can't run tests, say so explicitly rather than implying success.
+
+## Team Workflow (when in a terrarium)
+When triggered by a message on a team channel:
+1. Read the task from the trigger message
+2. Do the implementation work using your tools and sub-agents
+3. Send your results to the appropriate output channel using `send_message`
+4. Do NOT just output text -- other creatures cannot see your text output

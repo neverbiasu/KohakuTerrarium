@@ -339,14 +339,11 @@ def _build_channel_hints(
     extra_context: dict | None = None,
     tool_format: str = "bracket",
 ) -> str:
-    """Build channel communication hints when channel tools are registered.
+    """Build channel communication hints for standalone agents.
 
-    Two paths:
-    - SubAgentChannel (queue): pre-defined, listed statically in prompt
-    - AgentChannel (broadcast): dynamic, seed prompt with current listing
-
-    Channel info can be provided via extra_context["channels"] (list of dicts
-    with name, type, description) or auto-detected from the session.
+    For terrarium creatures, the topology prompt (build_channel_topology_prompt)
+    provides the main channel guidance. This function only adds hints for
+    standalone agents or agents with send_message/wait_channel tools.
     """
     tool_names = set(registry.list_tools())
     has_send = "send_message" in tool_names
@@ -355,64 +352,32 @@ def _build_channel_hints(
     if not has_send and not has_wait:
         return ""
 
-    # Get channel info from extra_context or empty
+    # If channel topology was already injected (terrarium creature),
+    # skip the generic hints -- topology prompt is more specific.
     channels: list[dict[str, str]] = []
     if extra_context and "channels" in extra_context:
         channels = extra_context["channels"]
 
-    lines = ["## Channel Communication", ""]
+    # If there are channels, the topology prompt already covers them.
+    # Only add generic hints for standalone agents with no channel config.
+    if channels:
+        return ""
+
+    lines = ["## Internal Channels", ""]
     lines.append(
-        "You can communicate with other agents and sub-agents through named channels."
+        "`send_message` and `wait_channel` are for communicating with your "
+        "own sub-agents through internal channels. They are NOT for talking "
+        "to the user or other team members."
     )
     lines.append("")
-
-    # Split channels by type
-    queue_channels = [c for c in channels if c.get("type") == "queue"]
-    broadcast_channels = [c for c in channels if c.get("type") == "broadcast"]
-
-    if queue_channels:
-        lines.append("**Queue channels** (point-to-point, one consumer per message):")
-        for ch in queue_channels:
-            desc = f" — {ch['description']}" if ch.get("description") else ""
-            lines.append(f"- `{ch['name']}`{desc}")
-        lines.append("")
-
-    if broadcast_channels:
-        lines.append("**Broadcast channels** (all subscribers receive every message):")
-        for ch in broadcast_channels:
-            desc = f" — {ch['description']}" if ch.get("description") else ""
-            lines.append(f"- `{ch['name']}`{desc}")
-        lines.append("")
-
-    if not channels:
-        lines.append(
-            "No channels are pre-configured. You can create queue channels "
-            "on-the-fly by sending to any channel name."
-        )
-        lines.append("")
-
-    # Usage guidance (format-aware)
     lines.append("**Usage:**")
-    if tool_format == "native":
-        # Native mode: no syntax examples, API handles format
-        if has_send:
-            lines.append(
-                "- Use the `send_message` tool with `channel` and `message` parameters"
-            )
-        if has_wait:
-            lines.append(
-                "- Use the `wait_channel` tool with `channel` parameter to receive"
-            )
-    else:
-        # Custom format: describe tools without hardcoding bracket syntax
-        if has_send:
-            lines.append("- Use `send_message` to send (params: channel, message)")
-        if has_wait:
-            lines.append("- Use `wait_channel` to receive (params: channel, timeout)")
-    lines.append(
-        "- Queue channels can be created on-the-fly. "
-        "Broadcast channels must already exist."
-    )
+    if has_send:
+        lines.append("- `send_message(channel, message)` -- send to a named channel")
+    if has_wait:
+        lines.append(
+            "- `wait_channel(channel, timeout)` -- wait for a reply on a channel"
+        )
+    lines.append("")
 
     return "\n".join(lines)
 

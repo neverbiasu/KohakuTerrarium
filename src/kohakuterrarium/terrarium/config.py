@@ -70,17 +70,20 @@ def build_channel_topology_prompt(
     creature: CreatureConfig,
 ) -> str:
     """
-    Build a prompt section describing channel topology and semantics.
+    Build a prompt section describing channel topology for a creature.
 
-    Teaches the creature:
-    - How channels work (messages vs requests)
-    - Which channels it listens on and sends to
-    - The difference between queue and broadcast
-    - That receiving a message does NOT require a reply
+    This is the CRITICAL prompt that teaches the creature how to participate
+    in the terrarium. It must clearly distinguish:
+    - Team channels (shared, for communicating with OTHER creatures)
+    - Sub-agents (internal, for delegating work WITHIN this creature)
+    - The workflow: what to do when triggered, where to send results
     """
     ch_by_name: dict[str, ChannelConfig] = {}
     for ch in config.channels:
         ch_by_name[ch.name] = ch
+
+    listen_set = set(creature.listen_channels)
+    send_set = set(creature.send_channels)
 
     relevant_names: set[str] = set()
     relevant_names.update(creature.listen_channels)
@@ -92,31 +95,72 @@ def build_channel_topology_prompt(
     if not relevant_names:
         return ""
 
-    listen_set = set(creature.listen_channels)
-    send_set = set(creature.send_channels)
-
     lines: list[str] = [
         "## Team Communication",
         "",
-        "You are part of a multi-agent team. You communicate through channels.",
+        "You are part of a multi-agent team. You communicate through **team channels**.",
         "",
-        "IMPORTANT - How channels work:",
-        "- Messages arrive on your channels automatically. A message is INFORMATION, not a request.",
-        "- Receiving a message does NOT mean you must reply or send a message back.",
-        "- Only send a message when YOUR WORKFLOW requires it (e.g. sending your output to the next agent).",
-        "- Queue channels deliver to one recipient. Broadcast channels deliver to all team members.",
-        "- After you complete your task and output your termination keyword, you are DONE. Do not process further messages.",
+        "### CRITICAL RULES",
         "",
-        "### Your Channels",
+        "1. **All output to other creatures MUST go through `send_message`.**",
+        "   Your direct text output goes to the observer/user only.",
+        "   Other creatures CANNOT see your text output.",
+        "   To deliver results, you MUST call `send_message(channel=..., message=...)`.",
+        "",
+        "2. **Messages arrive automatically via triggers.**",
+        "   You do NOT need to call `wait_channel` for team channels.",
+        "   When a message arrives on a channel you listen to, you are",
+        "   automatically triggered and the message content is provided.",
+        "",
+        "3. **Do not confuse team channels with sub-agents.**",
+        "   - Team channels (`send_message`): communicate with OTHER creatures",
+        "   - Sub-agents (`explore`, `plan`, `worker`, etc.): YOUR internal tools",
+        "   Sub-agents are NOT team members. They are tools you use privately.",
         "",
     ]
+
+    # Workflow section: what to do when triggered
+    lines.append("### Your Workflow")
+    lines.append("")
+
+    if listen_set and send_set:
+        listen_list = ", ".join(
+            f"`{c}`" for c in sorted(listen_set) if c != creature.name
+        )
+        send_list = ", ".join(f"`{c}`" for c in sorted(send_set))
+        if listen_list:
+            lines.append(f"1. You receive tasks/messages on: {listen_list}")
+        lines.append("2. Do your work using your tools and sub-agents")
+        lines.append(f"3. Send your results via `send_message` to: {send_list}")
+        lines.append(
+            "4. If you have nothing to send, output a brief status for the observer"
+        )
+        lines.append("")
+    elif listen_set:
+        listen_list = ", ".join(
+            f"`{c}`" for c in sorted(listen_set) if c != creature.name
+        )
+        if listen_list:
+            lines.append(f"You receive on: {listen_list}")
+        lines.append(
+            "Process the task and output your result (no outgoing channels configured)."
+        )
+        lines.append("")
+    elif send_set:
+        send_list = ", ".join(f"`{c}`" for c in sorted(send_set))
+        lines.append(f"Send your output to: {send_list}")
+        lines.append("")
+
+    # Channel listing
+    lines.append("### Team Channels")
+    lines.append("")
 
     for ch_name in sorted(relevant_names):
         ch_cfg = ch_by_name.get(ch_name)
         if ch_cfg is None:
             continue
 
-        desc = f" - {ch_cfg.description}" if ch_cfg.description else ""
+        desc = f" -- {ch_cfg.description}" if ch_cfg.description else ""
         roles: list[str] = []
         if ch_name in listen_set:
             roles.append("listen")
@@ -126,20 +170,20 @@ def build_channel_topology_prompt(
 
         lines.append(f"- `{ch_name}` [{ch_cfg.channel_type}]{role_str}{desc}")
 
-    # Direct channel (auto-created, always available)
+    # Direct channel
     lines.append(
         f"- `{creature.name}` [queue] (listen)"
-        f" - your direct channel, messages from the manager or other creatures"
+        f" -- your direct channel, for messages addressed specifically to you"
     )
     lines.append("")
 
-    # List other creatures and their direct channels
+    # Team members
     other_creatures = [c.name for c in config.creatures if c.name != creature.name]
     if other_creatures:
         lines.append(f"### Team Members: {', '.join(other_creatures)}")
         lines.append(
-            "Each team member has a direct channel named after them "
-            "(e.g. send to channel `swe` to reach the swe creature)."
+            "Each has a direct channel named after them. "
+            'Use `send_message(channel="name", ...)` to reach them directly.'
         )
         lines.append("")
 

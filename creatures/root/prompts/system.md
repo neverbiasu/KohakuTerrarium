@@ -46,3 +46,7 @@ You have a team of specialized creatures. Use them.
 - Channel names tell you the workflow: tasks, review, feedback, results, etc.
 - Every creature has a direct channel named after it (e.g. send to channel "swe" to reach swe directly)
 - Creatures are autonomous - once they receive a task, they work independently
+- Use `info` to read full documentation for any terrarium tool before first use
+- When a creature finishes work without sending to a channel you observe,
+  you may receive a notification with their output preview. Use this to
+  follow up or report progress to the user.

@@ -68,10 +68,22 @@ class InfoTool(BaseTool):
                         exit_code=0,
                     )
 
-        # 4. Try tool's own get_full_documentation
-        if context and context.session:
-            # Access registry through the agent if possible
-            pass
+        # 4. Try tool's own get_full_documentation from the agent's registry
+        if context and context.agent:
+            registry = context.agent.registry
+            tool = registry.get_tool(name)
+            if tool and hasattr(tool, "get_full_documentation"):
+                fmt = context.tool_format or "native"
+                doc = tool.get_full_documentation(tool_format=fmt)
+                if doc:
+                    logger.debug("Loaded doc from tool instance", tool_name=name)
+                    return ToolResult(output=doc, exit_code=0)
+
+            # 5. Try sub-agent config
+            subagent = registry.get_subagent(name)
+            if subagent:
+                desc = getattr(subagent, "description", "") or f"Sub-agent: {name}"
+                return ToolResult(output=desc, exit_code=0)
 
         return ToolResult(
             error=f"No documentation found for '{name}'. "

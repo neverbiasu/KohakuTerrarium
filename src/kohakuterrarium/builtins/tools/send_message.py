@@ -150,7 +150,9 @@ class SendMessageTool(BaseTool):
     def get_full_documentation(self, tool_format: str = "native") -> str:
         return """# send_message
 
-Send a message to a named channel. Used for agent-to-agent communication.
+Send a message to a named channel. This is how you deliver results to
+other team members in a terrarium. Other creatures CANNOT see your direct
+text output -- you MUST use send_message to communicate with them.
 
 ## Arguments
 
@@ -159,19 +161,18 @@ Send a message to a named channel. Used for agent-to-agent communication.
 | channel | string | Channel name (required) |
 | message | string | Message content (required) |
 | metadata | string | Optional JSON metadata object |
-| channel_type | string | Channel type: "queue" (default) or "broadcast" |
-| reply_to | string | Optional message ID to reply to (for threading) |
+| reply_to | string | Optional message ID for threading |
 
-## Behavior
+## When to Use
 
-- Resolves the channel by checking private session channels first, then shared environment channels.
-- For queue channels, auto-creates in the private session if not found.
-- For broadcast channels, the channel must already exist.
-- Returns a confirmation with the generated message ID on success.
+- **After completing work**: send your results to the designated output channel
+- **For coordination**: send status updates to broadcast channels (e.g. team_chat)
+- **To reach a specific creature**: send to their direct channel (channel name = creature name)
 
-## Tips
+## Important
 
-- Use metadata to attach structured data (e.g. priority, tags) alongside the message content.
-- Use reply_to with a previous message ID to create threaded conversations.
-- Queue channels are point-to-point; broadcast channels deliver to all subscribers.
+- Your text output is visible only to the observer/user, NOT to other creatures.
+- If your workflow requires delivering results to another creature, you MUST
+  call send_message. Just outputting text does nothing for the team.
+- Queue channels deliver to one recipient. Broadcast channels deliver to all.
 """
