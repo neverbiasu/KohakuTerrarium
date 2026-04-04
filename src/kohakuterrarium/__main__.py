@@ -206,8 +206,6 @@ def main() -> int:
         return resume_cli(
             args.session, args.pwd, args.log_level, last=args.last, io_mode=args.mode
         )
-    elif args.command == "logs":
-        return logs_cli(args.session, args.agent, args.type, args.last, args.n)
     elif args.command == "list":
         return list_cli(args.path)
     elif args.command == "info":
