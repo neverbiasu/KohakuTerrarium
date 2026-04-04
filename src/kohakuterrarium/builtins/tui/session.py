@@ -33,6 +33,10 @@ from kohakuterrarium.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
+# Max widgets in chat scroll before culling old ones
+MAX_CHAT_WIDGETS = 80
+CULL_KEEP = 50  # After culling, keep this many
+
 IDLE_STATUS = "\u25cf KohakUwU"
 
 THINKING_FRAMES = [
@@ -65,6 +69,7 @@ class AgentTUI(App):
     #right-status-panel { height: 1fr; overflow-y: auto; padding: 1; }
 
     .chat-tab-scroll { height: 1fr; padding: 0 1; }
+    .cull-header { height: 1; color: $text-muted; text-align: center; padding: 0 1; }
     """
 
     BINDINGS = [
@@ -343,10 +348,35 @@ class TUISession:
                 chat.mount(widget)
                 if scroll:
                     chat.scroll_end(animate=False)
+                self._cull_chat_widgets(chat)
             except Exception:
                 pass
 
         self._safe_call(_do)
+
+    def _cull_chat_widgets(self, chat: VerticalScroll) -> None:
+        """Remove old widgets when chat has too many, keeping recent ones."""
+        children = list(chat.children)
+        if len(children) <= MAX_CHAT_WIDGETS:
+            return
+        # Remove oldest widgets, keep the last CULL_KEEP
+        to_remove = children[: len(children) - CULL_KEEP]
+        # Check if first remaining widget is already a "load more" button
+        has_header = len(children) > CULL_KEEP and hasattr(
+            children[0], "_is_cull_header"
+        )
+        for w in to_remove:
+            w.remove()
+        # Add a "culled" header if not already present
+        remaining = list(chat.children)
+        if remaining and not has_header:
+            count = len(to_remove)
+            header = Static(
+                f"[{count} earlier messages hidden. Scroll up was here.]",
+                classes="cull-header",
+            )
+            header._is_cull_header = True  # type: ignore[attr-defined]
+            chat.mount(header, before=remaining[0])
 
     # ── Chat area ───────────────────────────────────────────────
 
@@ -552,12 +582,20 @@ class TUISession:
                 text = widget.get_text().strip()
                 if not text:
                     return
-                # Mount a Textual Markdown widget (selectable, rendered)
-                # after the StreamingText, then remove the StreamingText
-                md = Markdown(text)
                 chat = self._app.query_one(f"#{scroll_id}", VerticalScroll)
+                # Check if user is at bottom before replacing
+                at_bottom = (
+                    chat.max_scroll_y == 0 or chat.scroll_y >= chat.max_scroll_y - 2
+                )
+                # Replace StreamingText with Textual Markdown (selectable)
+                md = Markdown(text)
                 chat.mount(md, after=widget)
                 widget.remove()
+                # Keep scroll at bottom if user was there
+                if at_bottom:
+                    chat.scroll_end(animate=False)
+                # Cull old widgets if too many
+                self._cull_chat_widgets(chat)
             except Exception:
                 pass
 
