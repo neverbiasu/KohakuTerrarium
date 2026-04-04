@@ -118,7 +118,37 @@ kt run @kohaku-creatures/creatures/swe
 kt terrarium run @kohaku-creatures/terrariums/swe_team
 ```
 
-The framework is not limited to Codex OAuth. It also supports OpenRouter, OpenAI, and OpenAI-compatible APIs. The bundled `swe` and `swe_team` examples are configured for Codex OAuth; the bundled `general` creature defaults to OpenRouter-style configuration.
+The framework is not limited to Codex OAuth. It also supports OpenRouter, OpenAI, Anthropic, and Google Gemini APIs.
+
+## Model Management
+
+KohakuTerrarium ships with 50+ LLM presets covering OpenAI, Anthropic Claude, Google Gemini, Qwen, and others. Short aliases like `claude`, `gemini`, `gpt5` make switching easy.
+
+```bash
+# Authenticate with any supported provider
+kt login codex          # ChatGPT subscription (OAuth)
+kt login openrouter     # OpenRouter API key
+kt login openai         # OpenAI API key
+kt login anthropic      # Anthropic API key
+kt login gemini         # Google Gemini API key
+
+# Browse and set a default
+kt model list
+kt model default claude-sonnet-4.6
+
+# Override per-run
+kt run @kohaku-creatures/creatures/swe --llm gemini
+```
+
+Agent configs reference profiles by name:
+
+```yaml
+controller:
+  llm: gpt-5.4          # profile name (recommended)
+  temperature: 0.7       # inline overrides still work
+```
+
+Resolution order: `--llm` CLI flag, then config `llm` field, then default model, then inline fallback. API keys are stored in `~/.kohakuterrarium/api_keys.yaml`; profiles and the default model are stored in `~/.kohakuterrarium/llm_profiles.yaml`.
 
 ## Programmatic Usage
 
@@ -263,6 +293,14 @@ Session files use the `.kohakutr` format and contain far more than a plain chat 
 - resumable triggers
 - config and topology metadata
 
+Sessions are also searchable. The `search_memory` tool gives agents keyword and semantic search over their own history, and the CLI exposes the same capability:
+
+```bash
+kt search my_session "how did we fix the auth bug"    # hybrid (FTS + vector)
+kt search my_session "database error" --mode fts      # keyword only
+kt embedding my_session                               # build vector index
+```
+
 ## Runtime Surfaces
 
 ### TUI (Terminal UI)
@@ -358,7 +396,7 @@ The repository includes default configs under `creatures/` and `terrariums/`, an
 
 | Creature | Description |
 |----------|-------------|
-| `general` | Base creature with 20 built-in tools, 6 built-in sub-agents, and the core prompt / workflow style |
+| `general` | Base creature with 21 built-in tools, 6 built-in sub-agents, and the core prompt / workflow style |
 | `swe` | Software engineering specialist with coding workflow and git safety rules |
 | `reviewer` | Code review specialist with structured severity-based feedback |
 | `ops` | Infrastructure and operations specialist |
@@ -384,7 +422,7 @@ tasks -> swe -> review -> reviewer -> feedback / results
 
 ### General built-in tools
 
-The default `general` creature ships with 20 built-in tools:
+The default `general` creature ships with 21 built-in tools:
 
 | Tool | Description |
 |------|-------------|
@@ -398,6 +436,7 @@ The default `general` creature ships with 20 built-in tools:
 | `tree` | Show directory structure as a tree |
 | `think` | Record an explicit reasoning step that stays in context |
 | `scratchpad` | Read and write session-scoped working memory |
+| `search_memory` | Search session history with keyword or semantic matching |
 | `info` | Load full documentation for a tool or sub-agent |
 | `ask_user` | Ask the user a question mid-execution |
 | `http` | Make HTTP requests to APIs and web pages |
@@ -468,16 +507,21 @@ The HTTP API and web dashboard are application layers built on top of the servin
 
 | Command | Description |
 |---------|-------------|
-| `kt run <path>` | Run a single creature / agent |
+| `kt run <path> [--llm profile] [--mode cli\|tui]` | Run a single creature / agent |
 | `kt terrarium run <path>` | Run a multi-agent terrarium with TUI |
 | `kt terrarium info <path>` | Show terrarium config details |
-| `kt resume [session]` | Resume a session (interactive picker if no arg) |
+| `kt resume [session] [--last]` | Resume a session (interactive picker if no arg) |
+| `kt login <provider>` | Authenticate (codex, openrouter, openai, anthropic, gemini) |
+| `kt model list` | Show available LLM profiles and presets |
+| `kt model default <name>` | Set the default model |
+| `kt model show <name>` | Show details for a profile |
+| `kt search <session> <query>` | Search session memory (keyword / semantic) |
+| `kt embedding <session>` | Build embedding index for a session |
 | `kt install <source> [-e]` | Install a creature / terrarium package |
 | `kt uninstall <name>` | Remove a package |
 | `kt list` | Show installed packages and agents |
 | `kt edit <@pkg/path>` | Edit a config in `$EDITOR` |
 | `kt info <path>` | Show agent config details |
-| `kt login codex` | Authenticate with Codex OAuth / ChatGPT subscription |
 
 ## Project Structure
 
@@ -489,7 +533,7 @@ src/kohakuterrarium/
   session/        # Session persistence (.kohakutr files), resume support
   serving/        # Transport-agnostic service manager and event streaming
   modules/        # Plugin protocols: input, output, tool, trigger
-  llm/            # LLM providers, including Codex OAuth support
+  llm/            # LLM providers, profiles (50+ presets), API key management
   parsing/        # Tool-call parsing and stream handling
   prompt/         # Prompt assembly and injection
   packages.py     # Package manager for kt install / resolve
@@ -509,8 +553,8 @@ If you want more detail after the README:
 
 - `docs/guide/getting-started.md` — installation, authentication, first agent
 - `docs/guide/configuration.md` — creature and terrarium YAML reference
-- `docs/concept/README.md` — core abstractions and why the split exists
-- `docs/architecture/README.md` — internal architecture and execution model
+- `docs/concepts/overview.md` — core abstractions and why the split exists
+- `docs/concepts/agents.md` — agent framework internals and execution model
 - `docs/api-reference/http.md` — HTTP and WebSocket API reference
 - `docs/api-reference/cli.md` — CLI reference
 
