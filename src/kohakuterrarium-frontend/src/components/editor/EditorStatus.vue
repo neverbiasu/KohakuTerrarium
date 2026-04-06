@@ -106,6 +106,47 @@
         </div>
       </div>
 
+      <!-- Model tab -->
+      <div v-else-if="activeTab === 'model'" class="flex flex-col gap-1.5">
+        <div class="flex items-center gap-2">
+          <span class="text-warm-400 w-14 shrink-0">Switch</span>
+          <el-select
+            v-model="selectedModel"
+            placeholder="Select model"
+            size="small"
+            class="flex-1"
+            :loading="modelsLoading"
+            @change="handleModelSwitch"
+          >
+            <el-option
+              v-for="m in availableModels"
+              :key="m.name"
+              :label="`${m.name} (${m.login_provider || m.provider})`"
+              :value="m.name"
+            />
+          </el-select>
+        </div>
+        <div v-if="modelSwitchError" class="text-coral text-[10px]">{{ modelSwitchError }}</div>
+        <div class="flex items-center gap-2">
+          <span class="text-warm-400 w-14 shrink-0">Current</span>
+          <span class="text-warm-600 dark:text-warm-300 font-mono truncate">
+            {{ chat.sessionInfo.model || instance?.model || '--' }}
+          </span>
+        </div>
+        <div v-if="currentProfile" class="flex items-center gap-2">
+          <span class="text-warm-400 w-14 shrink-0">Context</span>
+          <span class="text-warm-600 dark:text-warm-300 font-mono">
+            {{ formatTokens(currentProfile.max_context || 0) }}
+          </span>
+        </div>
+        <div v-if="currentProfile" class="flex items-center gap-2">
+          <span class="text-warm-400 w-14 shrink-0">Provider</span>
+          <span class="text-warm-600 dark:text-warm-300 font-mono">
+            {{ currentProfile.login_provider || currentProfile.provider || '--' }}
+          </span>
+        </div>
+      </div>
+
       <!-- File tab -->
       <div v-else-if="activeTab === 'file'" class="flex flex-col gap-1.5">
         <template v-if="editor.activeFile">
@@ -153,6 +194,7 @@
 import StatusDot from "@/components/common/StatusDot.vue";
 import { useChatStore } from "@/stores/chat";
 import { useEditorStore } from "@/stores/editor";
+import { configAPI, agentAPI } from "@/utils/api";
 
 const props = defineProps({
   instance: { type: Object, default: null },
@@ -163,10 +205,51 @@ const editor = useEditorStore();
 
 const activeTab = ref("session");
 
+// Model selection state
+const selectedModel = ref("");
+const availableModels = ref([]);
+const modelsLoading = ref(false);
+const modelSwitchError = ref("");
+
+const currentProfile = computed(() => {
+  const name = selectedModel.value || chat.sessionInfo.model || "";
+  return availableModels.value.find((m) => m.name === name) || null;
+});
+
+onMounted(async () => {
+  try {
+    modelsLoading.value = true;
+    availableModels.value = await configAPI.getModels();
+  } catch { /* ignore */ } finally {
+    modelsLoading.value = false;
+  }
+});
+
+watch(
+  [() => props.instance?.model, () => chat.sessionInfo.model],
+  ([instModel, sessModel]) => {
+    const best = sessModel || instModel || "";
+    if (best && best !== selectedModel.value) selectedModel.value = best;
+  },
+  { immediate: true },
+);
+
+async function handleModelSwitch(modelName) {
+  if (!props.instance?.id) return;
+  modelSwitchError.value = "";
+  try {
+    await agentAPI.switchModel(props.instance.id, modelName);
+  } catch (err) {
+    modelSwitchError.value = err.response?.data?.detail || "Switch failed";
+    selectedModel.value = chat.sessionInfo.model || "";
+  }
+}
+
 const tabs = [
   { key: "session", label: "Session" },
   { key: "tokens", label: "Tokens" },
   { key: "jobs", label: "Jobs" },
+  { key: "model", label: "Model" },
   { key: "file", label: "File" },
 ];
 
