@@ -228,6 +228,42 @@ export const sessionAPI = {
   },
 };
 
+/** Settings - API keys, custom models */
+export const settingsAPI = {
+  async getKeys() {
+    const { data } = await api.get("/settings/keys");
+    return data;
+  },
+  async saveKey(provider, key) {
+    const { data } = await api.post("/settings/keys", { provider, key });
+    return data;
+  },
+  async removeKey(provider) {
+    const { data } = await api.delete(`/settings/keys/${provider}`);
+    return data;
+  },
+  async getProfiles() {
+    const { data } = await api.get("/settings/profiles");
+    return data;
+  },
+  async saveProfile(profile) {
+    const { data } = await api.post("/settings/profiles", profile);
+    return data;
+  },
+  async deleteProfile(name) {
+    const { data } = await api.delete(`/settings/profiles/${name}`);
+    return data;
+  },
+  async getDefaultModel() {
+    const { data } = await api.get("/settings/default-model");
+    return data;
+  },
+  async setDefaultModel(name) {
+    const { data } = await api.post("/settings/default-model", { name });
+    return data;
+  },
+};
+
 /** Registry browser */
 export const registryAPI = {
   async listLocal() {

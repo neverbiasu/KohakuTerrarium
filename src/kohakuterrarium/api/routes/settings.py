@@ -1,0 +1,175 @@
+"""Settings routes - API keys, custom model profiles, default model."""
+
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
+
+from kohakuterrarium.llm.profiles import (
+    LLMProfile,
+    delete_profile,
+    get_api_key,
+    get_default_model,
+    list_api_keys,
+    list_all,
+    load_profiles,
+    save_api_key,
+    save_profile,
+    set_default_model,
+)
+
+router = APIRouter()
+
+
+# ── Request models ──
+
+
+class ApiKeyRequest(BaseModel):
+    provider: str
+    key: str
+
+
+class ProfileRequest(BaseModel):
+    name: str
+    model: str
+    provider: str = "openai"
+    base_url: str = ""
+    api_key_env: str = ""
+    max_context: int = 128000
+    max_output: int = 16384
+    temperature: float | None = None
+    reasoning_effort: str = ""
+    extra_body: dict | None = None
+
+
+class DefaultModelRequest(BaseModel):
+    name: str
+
+
+# ── API keys ──
+
+
+@router.get("/keys")
+def get_keys():
+    """List stored API keys (masked) + availability status."""
+    masked = list_api_keys()
+    # Add provider list with status
+    from kohakuterrarium.llm.profiles import PROVIDER_KEY_MAP, _is_available
+
+    providers = []
+    for provider, env_var in PROVIDER_KEY_MAP.items():
+        providers.append(
+            {
+                "provider": provider,
+                "env_var": env_var,
+                "has_key": bool(get_api_key(provider)),
+                "masked_key": masked.get(provider, ""),
+                "available": _is_available(provider),
+            }
+        )
+    # Add codex (OAuth-based)
+    providers.insert(
+        0,
+        {
+            "provider": "codex",
+            "env_var": "",
+            "has_key": _is_available("codex"),
+            "masked_key": "OAuth" if _is_available("codex") else "",
+            "available": _is_available("codex"),
+        },
+    )
+    return {"providers": providers}
+
+
+@router.post("/keys")
+def set_key(req: ApiKeyRequest):
+    """Save an API key for a provider."""
+    if not req.provider or not req.key:
+        raise HTTPException(400, "Provider and key are required")
+    save_api_key(req.provider, req.key)
+    return {"status": "saved", "provider": req.provider}
+
+
+@router.delete("/keys/{provider}")
+def remove_key(provider: str):
+    """Remove a stored API key."""
+    save_api_key(provider, "")
+    return {"status": "removed", "provider": provider}
+
+
+# ── Custom model profiles ──
+
+
+@router.get("/profiles")
+def get_profiles():
+    """List user-defined custom model profiles."""
+    profiles = load_profiles()
+    return {
+        "profiles": [
+            {
+                "name": name,
+                "model": p.model,
+                "provider": p.provider,
+                "base_url": p.base_url or "",
+                "api_key_env": p.api_key_env or "",
+                "max_context": p.max_context,
+                "max_output": p.max_output,
+                "temperature": p.temperature,
+                "reasoning_effort": p.reasoning_effort or "",
+                "extra_body": p.extra_body or {},
+            }
+            for name, p in profiles.items()
+        ]
+    }
+
+
+@router.post("/profiles")
+def create_profile(req: ProfileRequest):
+    """Create or update a custom model profile."""
+    if not req.name or not req.model:
+        raise HTTPException(400, "Name and model are required")
+    profile = LLMProfile(
+        name=req.name,
+        model=req.model,
+        provider=req.provider,
+        base_url=req.base_url or None,
+        api_key_env=req.api_key_env or None,
+        max_context=req.max_context,
+        max_output=req.max_output,
+        temperature=req.temperature,
+        reasoning_effort=req.reasoning_effort or None,
+        extra_body=req.extra_body,
+    )
+    save_profile(profile)
+    return {"status": "saved", "name": req.name}
+
+
+@router.delete("/profiles/{name}")
+def remove_profile(name: str):
+    """Delete a custom model profile."""
+    if not delete_profile(name):
+        raise HTTPException(404, f"Profile not found: {name}")
+    return {"status": "deleted", "name": name}
+
+
+# ── Default model ──
+
+
+@router.get("/default-model")
+def get_default():
+    """Get the current default model name."""
+    return {"default_model": get_default_model()}
+
+
+@router.post("/default-model")
+def set_default(req: DefaultModelRequest):
+    """Set the default model."""
+    set_default_model(req.name)
+    return {"status": "set", "default_model": req.name}
+
+
+# ── All models (convenience: same as /api/configs/models but here too) ──
+
+
+@router.get("/models")
+def get_all_models():
+    """List all available models (presets + user profiles) with status."""
+    return list_all()

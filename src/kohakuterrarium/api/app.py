@@ -15,6 +15,7 @@ from kohakuterrarium.api.routes import (
     files,
     registry,
     sessions,
+    settings,
     terrariums,
 )
 from kohakuterrarium.api.ws import (
@@ -84,6 +85,7 @@ def create_app(
     app.include_router(files.router, prefix="/api/files", tags=["files"])
     app.include_router(registry.router, prefix="/api/registry", tags=["registry"])
     app.include_router(sessions.router, prefix="/api/sessions", tags=["sessions"])
+    app.include_router(settings.router, prefix="/api/settings", tags=["settings"])
 
     # WebSocket routes
     app.include_router(ws_channels.router, tags=["ws"])
