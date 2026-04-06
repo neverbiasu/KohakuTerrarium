@@ -719,11 +719,18 @@ def create_embedder(config: dict[str, Any] | None = None) -> BaseEmbedder:
 
 ---
 
-## LLM Profiles (`llm/profiles.py`)
+## LLM Profiles (`llm/`)
 
-Centralized model configuration. Profiles define complete LLM settings (provider, model, context limits, extra params). Stored in `~/.kohakuterrarium/llm_profiles.yaml`.
+Centralized model configuration, split across three modules:
+
+- **`llm/profiles.py`** — `LLMProfile` dataclass, profile resolution and management
+- **`llm/presets.py`** — Built-in model presets and aliases (pure data)
+- **`llm/api_keys.py`** — API key storage and retrieval
+
+Profiles define complete LLM settings (provider, model, context limits, extra params). User profiles stored in `~/.kohakuterrarium/llm_profiles.yaml`, API keys in `~/.kohakuterrarium/api_keys.yaml`.
 
 ```python
+# llm/profiles.py
 @dataclass
 class LLMProfile:
     name: str
@@ -740,23 +747,24 @@ class LLMProfile:
     @classmethod
     def from_dict(cls, name: str, data: dict[str, Any]) -> "LLMProfile"
 
-# Profile management
+# Profile management (llm/profiles.py)
 def load_profiles() -> dict[str, LLMProfile]
 def get_profile(name: str) -> LLMProfile | None
 def get_preset(name: str) -> LLMProfile | None
 def save_profile(profile: LLMProfile) -> None
 def delete_profile(name: str) -> bool
 
-# Resolution
+# Resolution (llm/profiles.py)
 def resolve_controller_llm(controller_config: dict[str, Any], llm_override: str | None = None) -> LLMProfile | None:
     """Resolve LLM for a controller. Order: CLI override -> config["llm"] -> default_model -> None."""
 
-# API keys
+# API keys (llm/api_keys.py)
 def save_api_key(provider: str, key: str) -> None
 def get_api_key(provider_or_env: str) -> str
+def list_api_keys() -> dict[str, str]  # masked keys
 
-# Built-in presets (model-specific metadata)
-PRESETS: dict[str, dict[str, Any]]   # ~40 presets: OpenAI, Claude, Gemini, Qwen, Kimi, etc.
+# Built-in presets (llm/presets.py)
+PRESETS: dict[str, dict[str, Any]]   # 50+ presets: OpenAI, Claude, Gemini, Qwen, Kimi, MiMo, etc.
 ALIASES: dict[str, str]             # Short names -> canonical preset names
 ```
 
