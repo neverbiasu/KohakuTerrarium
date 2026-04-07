@@ -146,7 +146,7 @@
             title="Compact context"
             @click="triggerCompact"
           >
-            <span class="i-carbon-compress text-xs" />
+            <span class="i-carbon-collapse-all text-xs" />
           </button>
           <button
             class="w-7 h-7 flex items-center justify-center rounded-md transition-colors shrink-0 text-warm-400 hover:text-coral hover:bg-coral/10"
