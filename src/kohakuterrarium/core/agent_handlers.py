@@ -1,10 +1,4 @@
-"""
-Agent event handling and tool execution.
-
-Contains mixin methods for processing events, executing tools,
-collecting results, and managing background jobs. Separated from
-the main Agent class to keep file sizes manageable.
-"""
+"""Agent event handling, tool dispatch, and result collection."""
 
 import asyncio
 import importlib
@@ -13,6 +7,15 @@ from kohakuterrarium.core.agent_tools import (
     AgentToolsMixin,
     _TurnResult,
     _make_job_label,
+)
+from kohakuterrarium.core.backgroundify import BackgroundifyHandle, backgroundify
+
+_BG_PLACEHOLDER = (
+    "Running in background — task delegated. "
+    "Do NOT do this same task yourself — it is already being done. "
+    "Do NOT use bash echo/sleep to wait — just end your response. "
+    "Work on a DIFFERENT task or STOP your response now. "
+    "Result arrives automatically in the next turn."
 )
 from kohakuterrarium.core.controller import Controller
 from kohakuterrarium.core.events import (
@@ -222,7 +225,7 @@ class AgentHandlersMixin(AgentToolsMixin):
 
             # Check interrupt after LLM turn (before waiting for tools)
             if self._interrupt_requested:
-                self._cancel_direct_tasks(round_result.direct_tasks)
+                self._cancel_handles(round_result.handles)
                 self._interrupt_requested = False
                 controller._interrupted = False
                 self.output_router.notify_activity(
@@ -240,8 +243,8 @@ class AgentHandlersMixin(AgentToolsMixin):
             # Collect feedback and decide whether to continue
             should_continue = await self._collect_and_push_feedback(
                 controller,
-                round_result.direct_tasks,
-                round_result.direct_job_ids,
+                round_result.handles,
+                round_result.handle_order,
                 round_result.native_tool_call_ids,
                 round_result.native_mode,
             )
@@ -253,8 +256,8 @@ class AgentHandlersMixin(AgentToolsMixin):
 
         Returns a ``_TurnResult`` with collected job info and text output.
         """
-        direct_tasks: dict[str, asyncio.Task] = {}
-        direct_job_ids: list[str] = []
+        handles: dict[str, BackgroundifyHandle] = {}
+        handle_order: list[str] = []
         round_text: list[str] = []
         native_mode = getattr(controller.config, "tool_format", None) == "native"
         native_tool_call_ids: dict[str, str] = {}
@@ -267,8 +270,8 @@ class AgentHandlersMixin(AgentToolsMixin):
                 await self._dispatch_tool_event(
                     parse_event,
                     controller,
-                    direct_tasks,
-                    direct_job_ids,
+                    handles,
+                    handle_order,
                     native_tool_call_ids,
                     native_mode,
                 )
@@ -276,8 +279,8 @@ class AgentHandlersMixin(AgentToolsMixin):
                 await self._dispatch_subagent_event(
                     parse_event,
                     controller,
-                    direct_tasks,
-                    direct_job_ids,
+                    handles,
+                    handle_order,
                     native_tool_call_ids,
                     native_mode,
                 )
@@ -289,8 +292,8 @@ class AgentHandlersMixin(AgentToolsMixin):
                 await self.output_router.route(parse_event)
 
         return _TurnResult(
-            direct_tasks=direct_tasks,
-            direct_job_ids=direct_job_ids,
+            handles=handles,
+            handle_order=handle_order,
             text_output=round_text,
             native_mode=native_mode,
             native_tool_call_ids=native_tool_call_ids,
@@ -300,12 +303,12 @@ class AgentHandlersMixin(AgentToolsMixin):
         self,
         parse_event: ToolCallEvent,
         controller: Controller,
-        direct_tasks: dict[str, asyncio.Task],
-        direct_job_ids: list[str],
+        handles: dict[str, BackgroundifyHandle],
+        handle_order: list[str],
         native_tool_call_ids: dict[str, str],
         native_mode: bool,
     ) -> None:
-        """Handle a ToolCallEvent: start the tool and track it."""
+        """Handle a ToolCallEvent: wrap in backgroundify and track."""
         tool_call_id = parse_event.args.pop("_tool_call_id", None)
         run_bg = parse_event.args.pop("run_in_background", False)
 
@@ -317,24 +320,31 @@ class AgentHandlersMixin(AgentToolsMixin):
         elif run_bg:
             is_direct = False
 
+        # Wrap in backgroundify handle
+        handle = backgroundify(
+            task,
+            job_id,
+            on_bg_complete=self._on_backgroundify_complete,
+            background_init=not is_direct,
+        )
+
         if tool_call_id:
             native_tool_call_ids[job_id] = tool_call_id
 
-        if is_direct:
-            direct_tasks[job_id] = task
-            direct_job_ids.append(job_id)
-        elif tool_call_id:
-            # Background: add placeholder for native mode conversation
-            controller.conversation.append(
-                "tool",
-                f"[{parse_event.name}] Running in background — task delegated. "
-                "Do NOT do this same task yourself — it is already being done. "
-                "Do NOT use bash echo/sleep to wait — just end your response. "
-                "Work on a DIFFERENT task or STOP your response now. "
-                "Result arrives automatically in the next turn.",
-                tool_call_id=tool_call_id,
-                name=parse_event.name,
-            )
+        if handle.promoted:
+            # Already background — add placeholder
+            if tool_call_id:
+                controller.conversation.append(
+                    "tool",
+                    f"[{parse_event.name}] {_BG_PLACEHOLDER}",
+                    tool_call_id=tool_call_id,
+                    name=parse_event.name,
+                )
+        else:
+            # Direct — track for gathering (promotable mid-wait)
+            handles[job_id] = handle
+            handle_order.append(job_id)
+            self._active_handles[job_id] = handle
 
         logger.debug(
             "Tool started",
@@ -350,54 +360,49 @@ class AgentHandlersMixin(AgentToolsMixin):
         self,
         parse_event: SubAgentCallEvent,
         controller: Controller,
-        direct_tasks: dict[str, asyncio.Task] | None = None,
-        direct_job_ids: list[str] | None = None,
+        handles: dict[str, BackgroundifyHandle] | None = None,
+        handle_order: list[str] | None = None,
         native_tool_call_ids: dict[str, str] | None = None,
         native_mode: bool = False,
     ) -> None:
-        """Handle a SubAgentCallEvent: start the sub-agent.
-
-        If the sub-agent is direct (run_in_background=false), it is added
-        to direct_tasks/direct_job_ids just like a direct tool so the
-        controller loop waits for its result before the next LLM turn.
-        """
+        """Handle a SubAgentCallEvent: wrap in backgroundify and track."""
         sa_tool_call_id = parse_event.args.pop("_tool_call_id", None)
         full_task = parse_event.args.get("task", "")
+        job_id, is_bg = await self._start_subagent_async(parse_event)
 
-        job_id, is_background = await self._start_subagent_async(parse_event)
+        sa_task = self.subagent_manager._tasks.get(job_id)
+        handle = (
+            backgroundify(
+                sa_task,
+                job_id,
+                on_bg_complete=self._on_backgroundify_complete,
+                background_init=is_bg,
+            )
+            if sa_task
+            else None
+        )
 
-        if is_background:
-            # Background: add placeholder so the model knows it's running
+        if handle and handle.promoted:
             if sa_tool_call_id:
                 controller.conversation.append(
                     "tool",
-                    f"[{parse_event.name}] Sub-agent is handling this task. "
-                    "Do NOT do this same task yourself — the sub-agent is already doing it. "
-                    "Do NOT use bash echo/sleep to wait — just end your response. "
-                    "Work on a DIFFERENT task or STOP your response now. "
-                    "Result arrives automatically in the next turn.",
+                    f"[{parse_event.name}] {_BG_PLACEHOLDER}",
                     tool_call_id=sa_tool_call_id,
                     name=parse_event.name,
                 )
-        else:
-            # Direct: add to direct_tasks so the loop gathers it
-            sa_task = self.subagent_manager._tasks.get(job_id)
-            if sa_task and direct_tasks is not None and direct_job_ids is not None:
-                direct_tasks[job_id] = sa_task
-                direct_job_ids.append(job_id)
-                if sa_tool_call_id and native_tool_call_ids is not None:
-                    native_tool_call_ids[job_id] = sa_tool_call_id
+        elif handle and handles is not None and handle_order is not None:
+            handles[job_id] = handle
+            handle_order.append(job_id)
+            self._active_handles[job_id] = handle
+            if sa_tool_call_id and native_tool_call_ids is not None:
+                native_tool_call_ids[job_id] = sa_tool_call_id
 
         await self._flush_output()
         _, label = _make_job_label(job_id)
         self.output_router.notify_activity(
             "subagent_start",
             f"[{label}] {full_task[:60]}",
-            metadata={
-                "job_id": job_id,
-                "task": full_task,
-                "background": is_background,
-            },
+            metadata={"job_id": job_id, "task": full_task, "background": is_bg},
         )
 
     def _notify_command_result(self, parse_event: CommandResultEvent) -> None:
@@ -456,16 +461,12 @@ class AgentHandlersMixin(AgentToolsMixin):
     async def _collect_and_push_feedback(
         self,
         controller: Controller,
-        direct_tasks: dict[str, asyncio.Task],
-        direct_job_ids: list[str],
+        handles: dict[str, BackgroundifyHandle],
+        handle_order: list[str],
         native_tool_call_ids: dict[str, str],
         native_mode: bool,
     ) -> bool:
-        """Collect tool results and output feedback, push to controller.
-
-        Returns True if the loop should continue (feedback was pushed),
-        False if there is nothing more to process.
-        """
+        """Collect tool results via backgroundify handles, push to controller."""
         feedback_parts: list[str] = []
 
         # Output feedback (tells model what was sent to named outputs)
@@ -473,22 +474,26 @@ class AgentHandlersMixin(AgentToolsMixin):
         if output_feedback:
             feedback_parts.append(output_feedback)
 
-        # Direct tool results
+        # Wait for handles (direct tools + sub-agents)
         native_results_added = False
-        if direct_tasks and self._interrupt_requested:
-            self._cancel_direct_tasks(direct_tasks)
+        if handles and self._interrupt_requested:
+            self._cancel_handles(handles)
             return False
-        if direct_tasks:
-            logger.info("Waiting for %d direct tool(s)", len(direct_tasks))
-            if native_mode and native_tool_call_ids:
-                await self._add_native_tool_results(
-                    controller, direct_job_ids, direct_tasks, native_tool_call_ids
-                )
-                native_results_added = True
-            else:
-                results = await self._collect_tool_results(direct_job_ids, direct_tasks)
-                if results:
-                    feedback_parts.append(results)
+        if handles:
+            logger.info("Waiting for %d direct task(s)", len(handles))
+            results = await self._wait_handles(
+                handles, handle_order, controller, native_tool_call_ids, native_mode
+            )
+            if results:
+                if native_mode and native_tool_call_ids:
+                    self._add_native_results_to_conversation(
+                        controller, handle_order, results, native_tool_call_ids
+                    )
+                    native_results_added = True
+                else:
+                    text = self._format_text_results(handle_order, results)
+                    if text:
+                        feedback_parts.append(text)
 
         # No feedback means we're done
         if not feedback_parts and not native_results_added:
@@ -561,12 +566,18 @@ class AgentHandlersMixin(AgentToolsMixin):
                 metadata=usage,
             )
 
-    def _cancel_direct_tasks(self, tasks: dict[str, asyncio.Task]) -> None:
-        """Cancel all running direct tool tasks (on interrupt)."""
-        for job_id, task in tasks.items():
-            if not task.done():
-                task.cancel()
-                logger.debug("Cancelled direct task", job_id=job_id)
+    def _cancel_handles(self, handles: dict[str, BackgroundifyHandle]) -> None:
+        """Cancel all non-promoted handles (on interrupt).
+
+        Promoted handles are already background — they keep running.
+        """
+        for job_id, handle in handles.items():
+            if handle.promoted:
+                logger.debug("Skipping promoted handle", job_id=job_id)
+                continue
+            if not handle.done:
+                handle.task.cancel()
+                logger.debug("Cancelled direct handle", job_id=job_id)
 
     # ------------------------------------------------------------------
     # Output helpers

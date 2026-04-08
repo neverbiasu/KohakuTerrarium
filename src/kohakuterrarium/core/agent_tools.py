@@ -2,9 +2,11 @@
 
 import asyncio
 from dataclasses import dataclass, field
+from typing import Any
 
+from kohakuterrarium.core.backgroundify import BackgroundifyHandle, PromotionResult
 from kohakuterrarium.core.controller import Controller
-from kohakuterrarium.core.events import TriggerEvent
+from kohakuterrarium.core.events import TriggerEvent, create_tool_complete_event
 from kohakuterrarium.core.job import JobResult
 from kohakuterrarium.modules.tool.base import BaseTool, ExecutionMode
 from kohakuterrarium.parsing import SubAgentCallEvent, ToolCallEvent
@@ -75,27 +77,143 @@ class AgentToolsMixin:
             task = asyncio.create_task(_error_result())
             return error_job_id, task, True
 
-    async def _add_native_tool_results(
+    # ------------------------------------------------------------------
+    # Handle-based waiting (replaces asyncio.gather)
+    # ------------------------------------------------------------------
+
+    async def _wait_handles(
         self,
+        handles: dict[str, BackgroundifyHandle],
+        handle_order: list[str],
         controller: Controller,
-        job_ids: list[str],
-        tasks: dict[str, asyncio.Task],
         tool_call_ids: dict[str, str],
-    ) -> None:
-        """Wait for tools and add results as role='tool' messages.
+        native_mode: bool,
+    ) -> dict[str, Any]:
+        """Wait for all handles, processing promotions as they occur.
 
-        For native tool calling mode: appends proper tool messages
-        to the conversation so the LLM sees structured results.
+        Returns dict of job_id → result for tasks that completed as direct.
+        Promoted tasks get a placeholder and their results arrive later
+        via ``_on_backgroundify_complete``.
         """
-        if not tasks:
-            return
+        if not handles:
+            return {}
 
-        results_list = await asyncio.gather(
-            *[tasks[jid] for jid in job_ids],
-            return_exceptions=True,
+        results: dict[str, Any] = {}
+        pending = dict(handles)
+
+        while pending:
+            futures = {
+                asyncio.ensure_future(h.wait()): jid for jid, h in pending.items()
+            }
+
+            done, _ = await asyncio.wait(
+                futures.keys(), return_when=asyncio.FIRST_COMPLETED
+            )
+
+            for future in done:
+                jid = futures[future]
+                pending.pop(jid)
+                try:
+                    result = future.result()
+                except (asyncio.CancelledError, Exception) as exc:
+                    result = exc
+
+                if isinstance(result, PromotionResult):
+                    self._handle_promotion(jid, controller, tool_call_ids, native_mode)
+                    # Remove from active handles (now background)
+                    self._active_handles.pop(jid, None)
+                else:
+                    results[jid] = result
+                    self._active_handles.pop(jid, None)
+
+            # Cancel futures that didn't complete (re-created next loop)
+            for f in futures:
+                if f not in done:
+                    f.cancel()
+
+        return results
+
+    def _handle_promotion(
+        self,
+        job_id: str,
+        controller: Controller,
+        tool_call_ids: dict[str, str],
+        native_mode: bool,
+    ) -> None:
+        """Handle a task that was promoted to background mid-wait."""
+        tool_name, label = _make_job_label(job_id)
+        logger.info("Task promoted to background", job_id=job_id)
+
+        # In native mode, add placeholder tool result so conversation stays valid
+        tool_call_id = tool_call_ids.get(job_id)
+        if native_mode and tool_call_id:
+            controller.conversation.append(
+                "tool",
+                f"[{tool_name}] Promoted to background. Result arrives in a later turn.",
+                tool_call_id=tool_call_id,
+                name=tool_name,
+            )
+
+        self.output_router.notify_activity(
+            "task_promoted",
+            f"[{label}] Moved to background",
+            metadata={"job_id": job_id},
         )
 
-        for job_id, result in zip(job_ids, results_list):
+    async def _on_backgroundify_complete(self, job_id: str, result: Any) -> None:
+        """Callback when a promoted (backgroundified) task completes.
+
+        Builds a TriggerEvent and reuses the existing ``_on_bg_complete``
+        path for activity notification and event processing.
+        """
+        if isinstance(result, Exception):
+            event = create_tool_complete_event(
+                job_id=job_id, content="", error=str(result)
+            )
+        elif hasattr(result, "output"):
+            # JobResult or SubAgentResult
+            event = create_tool_complete_event(
+                job_id=job_id,
+                content=result.output or "",
+                exit_code=getattr(result, "exit_code", 0),
+                error=result.error if hasattr(result, "error") else None,
+            )
+            # Attach sub-agent metadata if present
+            if hasattr(result, "turns"):
+                if event.context is None:
+                    event.context = {}
+                event.context["subagent_metadata"] = {
+                    "tools_used": getattr(result, "metadata", {}).get("tools_used", []),
+                    "turns": result.turns,
+                    "duration": getattr(result, "duration", 0),
+                    "total_tokens": getattr(result, "total_tokens", 0),
+                    "prompt_tokens": getattr(result, "prompt_tokens", 0),
+                    "completion_tokens": getattr(result, "completion_tokens", 0),
+                }
+        else:
+            event = create_tool_complete_event(
+                job_id=job_id, content=str(result) if result else ""
+            )
+
+        self._on_bg_complete(event)
+
+    # ------------------------------------------------------------------
+    # Result processing (native and text format)
+    # ------------------------------------------------------------------
+
+    def _add_native_results_to_conversation(
+        self,
+        controller: Controller,
+        handle_order: list[str],
+        results: dict[str, Any],
+        tool_call_ids: dict[str, str],
+    ) -> None:
+        """Add completed results as role='tool' messages (native mode)."""
+        for job_id in handle_order:
+            if job_id not in results:
+                continue  # Was promoted — placeholder already added
+
+            result = results[job_id]
             tool_name, label = _make_job_label(job_id)
             tool_call_id = tool_call_ids.get(job_id, job_id)
 
@@ -104,7 +222,7 @@ class AgentToolsMixin:
                 self.output_router.notify_activity(
                     "tool_error", f"[{label}] FAILED: {result}"
                 )
-            elif result is not None and result.error:
+            elif result is not None and hasattr(result, "error") and result.error:
                 output = result.output or ""
                 content = f"Error: {result.error}"
                 if output:
@@ -113,16 +231,15 @@ class AgentToolsMixin:
                     "tool_error", f"[{label}] ERROR: {result.error}"
                 )
             elif result is not None:
-                content = result.output if result.output else ""
+                content = result.output if hasattr(result, "output") else str(result)
+                content = content or ""
                 exit_code = getattr(result, "exit_code", 0)
                 status = "OK" if exit_code == 0 else f"exit={exit_code}"
-                # For TUI display: extract text preview from multimodal content
                 preview = (
                     result.get_text_output()[:5000]
                     if hasattr(result, "get_text_output")
                     else str(content)[:5000]
                 )
-                # Sub-agent results: emit subagent_done with richer metadata
                 is_subagent = job_id.startswith("agent_")
                 activity = "subagent_done" if is_subagent else "tool_done"
                 meta: dict = {"job_id": job_id, "output": preview}
@@ -135,58 +252,47 @@ class AgentToolsMixin:
                         "tools_used", []
                     )
                 self.output_router.notify_activity(
-                    activity,
-                    f"[{label}] {status}",
-                    metadata=meta,
+                    activity, f"[{label}] {status}", metadata=meta
                 )
             else:
                 content = ""
 
             controller.conversation.append(
-                "tool",
-                content,
-                tool_call_id=tool_call_id,
-                name=tool_name,
+                "tool", content, tool_call_id=tool_call_id, name=tool_name
             )
 
-    async def _collect_tool_results(
+    def _format_text_results(
         self,
-        job_ids: list[str],
-        tasks: dict[str, asyncio.Task],
+        handle_order: list[str],
+        results: dict[str, Any],
     ) -> str:
-        """Wait for all tools to complete and return formatted results."""
-        if not tasks:
-            return ""
-
-        results_list = await asyncio.gather(
-            *[tasks[jid] for jid in job_ids],
-            return_exceptions=True,
-        )
-
+        """Format completed results as text feedback (non-native mode)."""
         result_strs: list[str] = []
-        for job_id, result in zip(job_ids, results_list):
+        for job_id in handle_order:
+            if job_id not in results:
+                continue  # Was promoted
+
+            result = results[job_id]
             _, label = _make_job_label(job_id)
 
             if isinstance(result, Exception):
-                result_strs.append(f"## {job_id} - FAILED\n{str(result)}")
-                logger.info("Tool %s: failed", job_id)
+                result_strs.append(f"## {job_id} - FAILED\n{result}")
                 self.output_router.notify_activity(
                     "tool_error", f"[{label}] FAILED: {result}"
                 )
             elif result is not None:
-                output = result.output if result.output else ""
-                if result.error:
-                    result_strs.append(f"## {job_id} - ERROR\n{result.error}\n{output}")
-                    logger.info("Tool %s: error", job_id)
+                output = result.output if hasattr(result, "output") else str(result)
+                output = output or ""
+                error = getattr(result, "error", None)
+                if error:
+                    result_strs.append(f"## {job_id} - ERROR\n{error}\n{output}")
                     self.output_router.notify_activity(
-                        "tool_error", f"[{label}] ERROR: {result.error}"
+                        "tool_error", f"[{label}] ERROR: {error}"
                     )
                 else:
-                    status = (
-                        "OK" if result.exit_code == 0 else f"exit={result.exit_code}"
-                    )
+                    exit_code = getattr(result, "exit_code", 0)
+                    status = "OK" if exit_code == 0 else f"exit={exit_code}"
                     result_strs.append(f"## {job_id} - {status}\n{output}")
-                    logger.info("Tool %s: done", job_id)
                     self.output_router.notify_activity(
                         "tool_done",
                         f"[{label}] {status}",
@@ -287,8 +393,8 @@ class AgentToolsMixin:
 class _TurnResult:
     """Results from a single LLM turn, used internally by the controller loop."""
 
-    direct_tasks: dict[str, asyncio.Task] = field(default_factory=dict)
-    direct_job_ids: list[str] = field(default_factory=list)
+    handles: dict[str, BackgroundifyHandle] = field(default_factory=dict)
+    handle_order: list[str] = field(default_factory=list)
     text_output: list[str] = field(default_factory=list)
     native_mode: bool = False
     native_tool_call_ids: dict[str, str] = field(default_factory=dict)

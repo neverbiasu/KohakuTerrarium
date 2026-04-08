@@ -121,6 +121,9 @@ class Agent(AgentInitMixin, AgentHandlersMixin):
         self._interrupt_requested = False
         self._processing_task: asyncio.Task | None = None
 
+        # Active backgroundify handles (for TUI/frontend promotion access)
+        self._active_handles: dict[str, Any] = {}
+
         # Auto-compact (initialized after controller is ready)
         self.compact_manager: Any = None
 
@@ -475,6 +478,26 @@ class Agent(AgentInitMixin, AgentHandlersMixin):
                 f"Cancelled: {job_name}",
                 metadata={"job_id": job_id, "job_name": job_name},
             )
+
+    def _promote_handle(self, job_id: str) -> bool:
+        """Promote a running direct task to background.
+
+        Called from TUI click handler or frontend API.
+        Returns True if promotion succeeded.
+        """
+        handle = self._active_handles.get(job_id)
+        if not handle:
+            return False
+        if not handle.promote():
+            return False
+
+        self.output_router.notify_activity(
+            "task_promoted",
+            f"[{job_id}] Moved to background",
+            metadata={"job_id": job_id},
+        )
+        logger.info("Task promoted via UI", job_id=job_id)
+        return True
 
     def switch_model(self, profile_name: str) -> str:
         """Switch the LLM provider to a different model profile.
