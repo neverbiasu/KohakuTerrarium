@@ -341,12 +341,20 @@ export const useLayoutStore = defineStore("layout", () => {
     if (editMode.value) return;
     const p = activePreset.value;
     if (!p) return;
+    // Snapshot the original, then replace the live preset with a
+    // deep clone so mutations only touch the working copy.
     editModeSnapshot.value = _clone(p);
+    _mutateActivePreset(_clone(p));
     editMode.value = true;
     editModeDirty.value = false;
   }
 
   function exitEditMode() {
+    // Restore the original preset (discard unsaved changes).
+    const snap = editModeSnapshot.value;
+    if (snap) {
+      _mutateActivePreset(_clone(snap));
+    }
     editMode.value = false;
     editModeSnapshot.value = null;
     editModeDirty.value = false;
@@ -356,42 +364,21 @@ export const useLayoutStore = defineStore("layout", () => {
   function revertEditMode() {
     const snap = editModeSnapshot.value;
     if (!snap) return;
-    if (snap.builtin) {
-      builtinPresets.value = {
-        ...builtinPresets.value,
-        [snap.id]: _clone(snap),
-      };
-      // Clear any instance override that might have been applied.
-      resetPresetToDefault(snap.id);
-    } else {
-      userPresets.value = {
-        ...userPresets.value,
-        [snap.id]: _clone(snap),
-      };
-      _writeJson(USER_PRESETS_KEY, userPresets.value);
-    }
+    _mutateActivePreset(_clone(snap));
     editModeDirty.value = false;
   }
 
-  /** Commit the current in-memory preset to persistent storage. If
-   *  the active preset is builtin, changes are saved to a global
-   *  override so the next load re-applies them. */
+  /** Commit the current working copy to persistent storage.
+   *  Only works for user presets — builtins must use "Save as new". */
   function saveEditMode() {
     const p = activePreset.value;
-    if (!p) return;
-    if (p.builtin) {
-      // Persist as a global override patch on the builtin.
-      _writeJson(INSTANCE_OVERRIDE_PREFIX + "__global", {
-        ...(_readJson(INSTANCE_OVERRIDE_PREFIX + "__global", {}) || {}),
-        ["preset:" + p.id]: _clone(p),
-      });
-    } else {
-      userPresets.value = {
-        ...userPresets.value,
-        [p.id]: _clone(p),
-      };
-      _writeJson(USER_PRESETS_KEY, userPresets.value);
-    }
+    if (!p || p.builtin) return;
+    userPresets.value = {
+      ...userPresets.value,
+      [p.id]: _clone(p),
+    };
+    _writeJson(USER_PRESETS_KEY, userPresets.value);
+    editModeSnapshot.value = _clone(p);
     editModeDirty.value = false;
   }
 
