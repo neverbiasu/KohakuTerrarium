@@ -25,6 +25,7 @@ class TerrariumAPI:
     Wraps TerrariumRuntime with convenient methods for:
     - Channel operations (list, read, send, observe)
     - Creature operations (list, start, stop, status)
+    - Output wiring operations (list/add/remove edges)
     - Terrarium lifecycle (start, stop, status)
     """
 
@@ -197,6 +198,32 @@ class TerrariumAPI:
 
         logger.info("API: creature started", creature=name)
         return True
+
+    async def list_output_wiring(self, creature_name: str) -> list[dict[str, Any]]:
+        """List output_wiring edges for one creature."""
+        return self._runtime.list_output_wiring(creature_name)
+
+    async def add_output_wiring(
+        self,
+        creature_name: str,
+        target: str,
+        *,
+        with_content: bool = True,
+        prompt: str | None = None,
+        prompt_format: str = "simple",
+    ) -> dict[str, Any]:
+        """Hot-add one output_wiring edge for a creature."""
+        return await self._runtime.add_output_wiring(
+            creature_name,
+            target,
+            with_content=with_content,
+            prompt=prompt,
+            prompt_format=prompt_format,
+        )
+
+    async def remove_output_wiring(self, creature_name: str, target: str) -> bool:
+        """Hot-remove one output_wiring edge by target."""
+        return await self._runtime.remove_output_wiring(creature_name, target)
 
     # ------------------------------------------------------------------
     # Terrarium operations
