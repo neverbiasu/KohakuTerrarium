@@ -117,11 +117,12 @@ def _patch_runners(monkeypatch, calls: dict, *, dummy_runtime):
         calls["runner"] = "rich_cli"
         calls["runtime"] = runtime
 
-    async def fake_cli_runner(runtime, *, observe, no_observe):
+    async def fake_cli_runner(runtime, *, observe, no_observe, exit_on_channel=None):
         calls["runner"] = "cli"
         calls["runtime"] = runtime
         calls["observe"] = observe
         calls["no_observe"] = no_observe
+        calls["exit_on_channel"] = exit_on_channel
 
     async def fake_tui_runner(runtime):
         calls["runner"] = "tui"

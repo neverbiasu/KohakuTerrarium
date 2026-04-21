@@ -26,7 +26,6 @@ from kohakuterrarium.terrarium.cli_output import (
     _print_channel_message,
 )
 from kohakuterrarium.terrarium.config import load_terrarium_config
-from kohakuterrarium.terrarium.observer import ChannelObserver
 from kohakuterrarium.terrarium.runtime import TerrariumRuntime
 from kohakuterrarium.utils.logging import (
     get_logger,
@@ -453,10 +452,12 @@ async def run_terrarium_with_cli(
     *,
     observe: list[str] | None = None,
     no_observe: bool = False,
+    exit_on_channel: str | None = None,
 ) -> None:
     """Run a terrarium with a headless stdin/stdout CLI (plain mode)."""
     runtime_task = asyncio.create_task(runtime.run())
     observer = None
+    exit_event = asyncio.Event() if exit_on_channel else None
 
     try:
         for _ in range(20):
@@ -481,8 +482,17 @@ async def run_terrarium_with_cli(
             creature_outputs[name] = creature_output
 
         if not no_observe:
-            observer_args = argparse.Namespace(observe=observe, no_observe=no_observe)
-            observer = await _setup_observer(runtime, observer_args, runtime.config)
+            observer_args = argparse.Namespace(
+                observe=observe,
+                no_observe=no_observe,
+                exit_on_channel=exit_on_channel,
+            )
+            observer = await _setup_observer(
+                runtime,
+                observer_args,
+                runtime.config,
+                exit_event=exit_event,
+            )
 
         session_store = runtime.session_store
         if session_store:
@@ -507,7 +517,22 @@ async def run_terrarium_with_cli(
                         )
 
         while True:
-            text = await _read_cli_input()
+            if exit_event is not None:
+                input_task = asyncio.create_task(_read_cli_input())
+                exit_task = asyncio.create_task(exit_event.wait())
+                done, pending = await asyncio.wait(
+                    {input_task, exit_task},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                for task in pending:
+                    task.cancel()
+                await asyncio.gather(*pending, return_exceptions=True)
+                if exit_task in done:
+                    break
+                text = input_task.result()
+            else:
+                text = await _read_cli_input()
+
             if text is None:
                 break
 
@@ -592,6 +617,11 @@ def add_terrarium_subparser(subparsers: argparse._SubParsersAction) -> None:
             "Input/output mode. tui=full multi-tab, cli=rich single-creature "
             "(auto-picks root or first creature), plain=dumb stdout"
         ),
+    )
+    run_p.add_argument(
+        "--exit-on-channel",
+        default=None,
+        help="Exit cleanly after the first observed message on the given channel",
     )
 
     # terrarium info <path>
@@ -681,6 +711,7 @@ def _run_terrarium_cli(args: argparse.Namespace) -> int:
 
         async def _run_with_mode() -> None:
             llm = getattr(args, "llm", None)
+            exit_on_channel = getattr(args, "exit_on_channel", None)
             runtime = TerrariumRuntime(config, llm_override=llm)
             if store:
                 runtime._pending_session_store = store
@@ -691,6 +722,7 @@ def _run_terrarium_cli(args: argparse.Namespace) -> int:
                     runtime,
                     observe=args.observe,
                     no_observe=args.no_observe,
+                    exit_on_channel=exit_on_channel,
                 )
             else:
                 await run_terrarium_with_tui(runtime)
@@ -734,8 +766,15 @@ def _run_terrarium_cli(args: argparse.Namespace) -> int:
 
         # Setup observer
         observer = None
+        exit_on_channel = getattr(args, "exit_on_channel", None)
+        exit_event = asyncio.Event() if exit_on_channel else None
         if not args.no_observe:
-            observer = await _setup_observer(runtime, args, config)
+            observer = await _setup_observer(
+                runtime,
+                args,
+                config,
+                exit_event=exit_event,
+            )
 
         # Inject seed prompt
         if seed_prompt and has_seed_channel:
@@ -751,7 +790,10 @@ def _run_terrarium_cli(args: argparse.Namespace) -> int:
                     name=f"creature_{handle.name}",
                 )
                 runtime._creature_tasks.append(task)
-            await asyncio.gather(*runtime._creature_tasks, return_exceptions=True)
+            if exit_event is not None:
+                await exit_event.wait()
+            else:
+                await asyncio.gather(*runtime._creature_tasks, return_exceptions=True)
         except KeyboardInterrupt:
             pass
         finally:
@@ -770,9 +812,10 @@ def _run_terrarium_cli(args: argparse.Namespace) -> int:
         return 1
 
 
-async def _setup_observer(runtime, args, config):
+async def _setup_observer(runtime, args, config, exit_event: asyncio.Event | None = None):
     """Setup channel observer and return it."""
-    observer = ChannelObserver(runtime._session)
+    observer = runtime.observer
+    exit_on_channel = getattr(args, "exit_on_channel", None)
 
     def print_message(msg):
         _print_channel_message(
@@ -781,16 +824,27 @@ async def _setup_observer(runtime, args, config):
             content=msg.content,
             ts=msg.timestamp.strftime("%H:%M:%S"),
         )
+        if (
+            exit_event is not None
+            and exit_on_channel
+            and msg.channel == exit_on_channel
+            and not exit_event.is_set()
+        ):
+            print(f"Exit-on-channel triggered: {exit_on_channel}")
+            exit_event.set()
 
     observer.on_message(print_message)
 
     # Determine which channels to observe
     if args.observe is not None:
         # Explicit list (--observe ideas outline)
-        channels = args.observe if args.observe else []
+        channels = list(args.observe) if args.observe else []
     else:
         # Default: observe all channels
         channels = [c.name for c in config.channels]
+
+    if exit_on_channel and exit_on_channel not in channels:
+        channels.append(exit_on_channel)
 
     for ch_name in channels:
         await observer.observe(ch_name)
