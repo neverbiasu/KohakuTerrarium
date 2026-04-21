@@ -553,6 +553,37 @@ class KohakuManager:
         runtime = self._get_runtime(terrarium_id)
         await runtime.wire_channel(creature, channel, direction)
 
+    def creature_output_wiring_list(self, terrarium_id: str, creature: str) -> list[dict]:
+        """List output_wiring edges for one creature."""
+        runtime = self._get_runtime(terrarium_id)
+        return runtime.list_output_wiring(creature)
+
+    async def creature_output_wiring_add(
+        self,
+        terrarium_id: str,
+        creature: str,
+        target: str,
+        with_content: bool = True,
+        prompt: str | None = None,
+        prompt_format: str = "simple",
+    ) -> dict:
+        """Hot-add one output_wiring edge for a creature."""
+        runtime = self._get_runtime(terrarium_id)
+        return await runtime.add_output_wiring(
+            creature,
+            target,
+            with_content=with_content,
+            prompt=prompt,
+            prompt_format=prompt_format,
+        )
+
+    async def creature_output_wiring_remove(
+        self, terrarium_id: str, creature: str, target: str
+    ) -> bool:
+        """Hot-remove one output_wiring edge by target."""
+        runtime = self._get_runtime(terrarium_id)
+        return await runtime.remove_output_wiring(creature, target)
+
     def creature_switch_model(
         self, terrarium_id: str, name: str, profile_name: str
     ) -> str:

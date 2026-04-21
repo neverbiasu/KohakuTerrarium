@@ -20,6 +20,7 @@ import pytest
 from kohakuterrarium.core.agent import Agent
 from kohakuterrarium.core.channel import ChannelMessage
 from kohakuterrarium.core.config import load_agent_config
+from kohakuterrarium.core.output_wiring import PROMPT_FORMAT_JINJA
 from kohakuterrarium.core.session import (
     remove_session,
 )
@@ -472,5 +473,108 @@ class TestTerrariumHotPlugChannels:
         try:
             with pytest.raises((ValueError, KeyError)):
                 await runtime.wire_channel("nonexistent", "inbox", "listen")
+        finally:
+            await runtime.stop()
+
+
+# =========================================================================
+# Terrarium-level hot-plug: output wiring edges
+# =========================================================================
+
+
+class TestTerrariumHotPlugOutputWiring:
+    """Test hot-plug add/remove/list for output_wiring edges."""
+
+    @pytest.fixture()
+    def terrarium_config(self) -> TerrariumConfig:
+        """Minimal terrarium for output_wiring tests."""
+        swe_path = str(SWE_AGENT_DIR.resolve())
+        return TerrariumConfig(
+            name="hotplug_wiring_test",
+            creatures=[
+                CreatureConfig(
+                    name="alpha",
+                    config_data={
+                        "base_config": swe_path,
+                        "controller": {"provider": "openrouter", "model": "gpt-5.4"},
+                    },
+                    base_dir=Path("."),
+                    listen_channels=["inbox"],
+                    send_channels=["outbox"],
+                ),
+                CreatureConfig(
+                    name="beta",
+                    config_data={
+                        "base_config": swe_path,
+                        "controller": {"provider": "openrouter", "model": "gpt-5.4"},
+                    },
+                    base_dir=Path("."),
+                    listen_channels=["outbox"],
+                    send_channels=["inbox"],
+                ),
+            ],
+            channels=[
+                ChannelConfig(name="inbox", channel_type="queue"),
+                ChannelConfig(name="outbox", channel_type="queue"),
+            ],
+        )
+
+    @pytest.fixture(autouse=True)
+    def cleanup_sessions(self, terrarium_config: TerrariumConfig):
+        """Remove session created by runtime after each test."""
+        yield
+        remove_session(f"terrarium_{terrarium_config.name}")
+
+    async def test_add_output_wiring_edge(self, terrarium_config: TerrariumConfig):
+        """Hot-add output_wiring edge updates live agent config."""
+        runtime = TerrariumRuntime(terrarium_config)
+        with patch.dict(os.environ, FAKE_ENV):
+            await runtime.start()
+
+        try:
+            added = await runtime.add_output_wiring(
+                "alpha",
+                "beta",
+                with_content=False,
+                prompt="{{ source }} done",
+                prompt_format=PROMPT_FORMAT_JINJA,
+            )
+
+            assert added["to"] == "beta"
+            assert added["with_content"] is False
+            assert added["prompt_format"] == PROMPT_FORMAT_JINJA
+
+            edges = runtime.list_output_wiring("alpha")
+            assert len(edges) == 1
+            assert edges[0]["to"] == "beta"
+            assert edges[0]["with_content"] is False
+        finally:
+            await runtime.stop()
+
+    async def test_remove_output_wiring_edge(self, terrarium_config: TerrariumConfig):
+        """Hot-remove output_wiring edge returns True when removed."""
+        runtime = TerrariumRuntime(terrarium_config)
+        with patch.dict(os.environ, FAKE_ENV):
+            await runtime.start()
+
+        try:
+            await runtime.add_output_wiring("alpha", "beta")
+            removed = await runtime.remove_output_wiring("alpha", "beta")
+            assert removed is True
+            assert runtime.list_output_wiring("alpha") == []
+        finally:
+            await runtime.stop()
+
+    async def test_remove_missing_output_wiring_edge_returns_false(
+        self, terrarium_config: TerrariumConfig
+    ):
+        """Removing a missing output_wiring edge returns False."""
+        runtime = TerrariumRuntime(terrarium_config)
+        with patch.dict(os.environ, FAKE_ENV):
+            await runtime.start()
+
+        try:
+            removed = await runtime.remove_output_wiring("alpha", "beta")
+            assert removed is False
         finally:
             await runtime.stop()

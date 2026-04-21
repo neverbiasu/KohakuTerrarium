@@ -7,6 +7,7 @@ from kohakuterrarium.api.schemas import (
     CreatureAdd,
     ModelSwitch,
     SlashCommand,
+    OutputWiringAdd,
     WireChannel,
 )
 from kohakuterrarium.terrarium.config import CreatureConfig
@@ -163,3 +164,58 @@ async def wire_channel(
         return {"status": "wired"}
     except Exception as e:
         raise HTTPException(400, str(e))
+
+
+@router.get("/{name}/output-wiring")
+async def list_output_wiring(
+    terrarium_id: str, name: str, manager=Depends(get_manager)
+):
+    """List output_wiring edges for one creature."""
+    try:
+        edges = manager.creature_output_wiring_list(terrarium_id, name)
+        return {"creature": name, "output_wiring": edges}
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+
+
+@router.post("/{name}/output-wiring")
+async def add_output_wiring(
+    terrarium_id: str,
+    name: str,
+    req: OutputWiringAdd,
+    manager=Depends(get_manager),
+):
+    """Hot-add one output_wiring edge for a creature."""
+    try:
+        edge = await manager.creature_output_wiring_add(
+            terrarium_id,
+            name,
+            req.target,
+            with_content=req.with_content,
+            prompt=req.prompt,
+            prompt_format=req.prompt_format,
+        )
+        return {"status": "added", "creature": name, "edge": edge}
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
+
+@router.delete("/{name}/output-wiring/{target}")
+async def remove_output_wiring(
+    terrarium_id: str, name: str, target: str, manager=Depends(get_manager)
+):
+    """Hot-remove one output_wiring edge by target."""
+    try:
+        removed = await manager.creature_output_wiring_remove(
+            terrarium_id, name, target
+        )
+        if not removed:
+            raise HTTPException(
+                404,
+                f"No output_wiring edge found from '{name}' to '{target}'",
+            )
+        return {"status": "removed", "creature": name, "target": target}
+    except ValueError as e:
+        raise HTTPException(404, str(e))

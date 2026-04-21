@@ -1,13 +1,17 @@
-"""
-Hot-plug mixin for TerrariumRuntime.
+"""Hot-plug mixin for TerrariumRuntime.
 
-Provides methods to add/remove creatures and channels at runtime
-without restarting the terrarium.
+Provides methods to add/remove creatures, channels, and output-wiring
+edges at runtime without restarting the terrarium.
 """
 
 import asyncio
 
 from kohakuterrarium.core.channel import BaseChannel
+from kohakuterrarium.core.output_wiring import (
+    PROMPT_FORMAT_SIMPLE,
+    ROOT_TARGET,
+    OutputWiringEntry,
+)
 from kohakuterrarium.modules.trigger.channel import ChannelTrigger
 from kohakuterrarium.terrarium.config import (
     ChannelConfig,
@@ -28,6 +32,91 @@ class HotPlugMixin:
     Allows adding/removing creatures and channels while the
     terrarium is running.  Mixed into TerrariumRuntime.
     """
+
+    def list_output_wiring(self, creature_name: str) -> list[dict[str, object]]:
+        """List a creature's current output_wiring entries."""
+        handle = self._creatures.get(creature_name)
+        if handle is None:
+            raise ValueError(f"Creature not found: {creature_name}")
+
+        entries = list(getattr(handle.agent.config, "output_wiring", []) or [])
+        return [_entry_to_dict(entry) for entry in entries]
+
+    async def add_output_wiring(
+        self,
+        creature_name: str,
+        target: str,
+        *,
+        with_content: bool = True,
+        prompt: str | None = None,
+        prompt_format: str = PROMPT_FORMAT_SIMPLE,
+    ) -> dict[str, object]:
+        """Hot-add one output_wiring edge to a creature.
+
+        The change is immediate for subsequent turns. This updates both
+        the live agent config and the terrarium creature config data.
+        """
+        handle = self._creatures.get(creature_name)
+        if handle is None:
+            raise ValueError(f"Creature not found: {creature_name}")
+
+        self._validate_output_wiring_target(target)
+
+        entry = OutputWiringEntry(
+            to=target,
+            with_content=with_content,
+            prompt=prompt,
+            prompt_format=prompt_format,
+        )
+
+        entries = list(getattr(handle.agent.config, "output_wiring", []) or [])
+        entries.append(entry)
+        handle.agent.config.output_wiring = entries
+        _sync_output_wiring_config_data(handle, entries)
+
+        logger.info(
+            "Output wiring hot-added",
+            creature=creature_name,
+            target=target,
+            with_content=with_content,
+        )
+        return _entry_to_dict(entry)
+
+    async def remove_output_wiring(self, creature_name: str, target: str) -> bool:
+        """Hot-remove one output_wiring edge by target.
+
+        Removes the first matching edge from ``creature_name -> target``.
+        Returns False when no matching edge exists.
+        """
+        handle = self._creatures.get(creature_name)
+        if handle is None:
+            raise ValueError(f"Creature not found: {creature_name}")
+
+        entries = list(getattr(handle.agent.config, "output_wiring", []) or [])
+        for idx, entry in enumerate(entries):
+            if entry.to != target:
+                continue
+            entries.pop(idx)
+            handle.agent.config.output_wiring = entries
+            _sync_output_wiring_config_data(handle, entries)
+            logger.info(
+                "Output wiring hot-removed",
+                creature=creature_name,
+                target=target,
+            )
+            return True
+
+        return False
+
+    def _validate_output_wiring_target(self, target: str) -> None:
+        """Validate output_wiring target against current runtime topology."""
+        if target == ROOT_TARGET:
+            if self._root_agent is None:
+                raise ValueError("Target 'root' is unavailable: terrarium has no root")
+            return
+        if target in self._creatures:
+            return
+        raise ValueError(f"Invalid output_wiring target: {target}")
 
     async def add_creature(self, creature_cfg: CreatureConfig) -> CreatureHandle:
         """Add and start a new creature to a running terrarium.
@@ -207,3 +296,18 @@ class HotPlugMixin:
             )
         else:
             raise ValueError(f"Invalid direction: {direction}. Use 'listen' or 'send'")
+
+
+def _entry_to_dict(entry: OutputWiringEntry) -> dict[str, object]:
+    """Serialize one output_wiring entry for API/status responses."""
+    return {
+        "to": entry.to,
+        "with_content": entry.with_content,
+        "prompt": entry.prompt,
+        "prompt_format": entry.prompt_format,
+    }
+
+
+def _sync_output_wiring_config_data(handle: CreatureHandle, entries: list[OutputWiringEntry]) -> None:
+    """Mirror live output_wiring entries into CreatureConfig.config_data."""
+    handle.config.config_data["output_wiring"] = [_entry_to_dict(entry) for entry in entries]

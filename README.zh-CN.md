@@ -96,7 +96,8 @@ git clone https://github.com/Kohaku-Lab/KohakuTerrarium.git
 cd KohakuTerrarium
 uv pip install -e ".[dev]"
 
-# 从源代码运行 `kt web` / `kt app` 需要先构建前端
+# 从源代码运行 `kt web` / `kt app` 需要先构建前端；
+# 否则命令可能启动成功，但窗口里不会有可显示的页面内容
 npm install --prefix src/kohakuterrarium-frontend
 npm run build --prefix src/kohakuterrarium-frontend
 ```
@@ -387,6 +388,13 @@ kt serve start               # 长期常驻
 ### 桌面 App
 
 `kt app` 会在原生桌面窗口中打开网页 UI（需要 `pywebview`）。
+
+如果你从源码启动后只看到“已启动”但没有窗口内容，通常是因为前端静态包还没构建。先执行：
+
+```bash
+npm install --prefix src/kohakuterrarium-frontend
+npm run build --prefix src/kohakuterrarium-frontend
+```
 
 ## 会话、记忆与恢复
 

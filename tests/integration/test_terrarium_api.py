@@ -36,14 +36,20 @@ def terrarium_config() -> TerrariumConfig:
         creatures=[
             CreatureConfig(
                 name="alpha",
-                config_data={"base_config": swe_path},
+                config_data={
+                    "base_config": swe_path,
+                    "controller": {"provider": "openrouter", "model": "gpt-5.4"},
+                },
                 base_dir=Path("."),
                 listen_channels=["inbox_alpha"],
                 send_channels=["outbox_alpha", "team_chat"],
             ),
             CreatureConfig(
                 name="beta",
-                config_data={"base_config": swe_path},
+                config_data={
+                    "base_config": swe_path,
+                    "controller": {"provider": "openrouter", "model": "gpt-5.4"},
+                },
                 base_dir=Path("."),
                 listen_channels=["inbox_beta"],
                 send_channels=["outbox_beta", "team_chat"],
@@ -208,6 +214,28 @@ class TestAPICreatureOps:
     ):
         api = started_runtime.api
         assert await api.get_creature_status("no_creature") is None
+
+    async def test_output_wiring_add_list_remove(self, started_runtime: TerrariumRuntime):
+        api = started_runtime.api
+
+        added = await api.add_output_wiring(
+            "alpha",
+            "beta",
+            with_content=False,
+            prompt="[{{ source }}]",
+            prompt_format="jinja",
+        )
+        assert added["to"] == "beta"
+        assert added["with_content"] is False
+        assert added["prompt_format"] == "jinja"
+
+        edges = await api.list_output_wiring("alpha")
+        assert len(edges) == 1
+        assert edges[0]["to"] == "beta"
+
+        removed = await api.remove_output_wiring("alpha", "beta")
+        assert removed is True
+        assert await api.list_output_wiring("alpha") == []
 
 
 # ---------------------------------------------------------------------------

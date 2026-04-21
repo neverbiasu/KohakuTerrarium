@@ -93,6 +93,15 @@ class WireChannel(BaseModel):
     direction: str  # "listen" or "send"
 
 
+class OutputWiringAdd(BaseModel):
+    """Request body for hot-adding one output_wiring edge."""
+
+    target: str
+    with_content: bool = True
+    prompt: str | None = None
+    prompt_format: Literal["simple", "jinja"] = "simple"
+
+
 class AgentCreate(BaseModel):
     """Request body for creating a standalone agent."""
 
